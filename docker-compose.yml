@@ -1,0 +1,15 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    # Les secrets sont injectés au lancement : ils ne sont jamais copiés dans l'image.
+    env_file: .env
+    environment:
+      PORT: 3000
+    volumes:
+      - blog-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  blog-data:

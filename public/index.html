@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SecureBlog</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+    form { display: grid; gap: .5rem; margin-bottom: 1.5rem; }
+    input, textarea, button { font: inherit; padding: .5rem; }
+    .row { display: flex; gap: .5rem; }
+    .hidden { display: none; }
+    .msg { color: #b00020; min-height: 1.2em; }
+    article { border-top: 1px solid #ddd; padding: .75rem 0; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+  <h1>SecureBlog</h1>
+  <p class="msg" id="msg"></p>
+
+  <section id="guest">
+    <form id="auth-form">
+      <input name="username" placeholder="Identifiant" autocomplete="username" required>
+      <input name="password" type="password" placeholder="Mot de passe" autocomplete="current-password" required>
+      <div class="row">
+        <button type="submit" data-action="login">Se connecter</button>
+        <button type="submit" data-action="register">Créer un compte</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="member" class="hidden">
+    <p>Connecté en tant que <strong id="whoami"></strong> <button id="logout">Se déconnecter</button></p>
+    <form id="post-form">
+      <input name="title" placeholder="Titre" required>
+      <textarea name="content" rows="4" placeholder="Contenu" required></textarea>
+      <button type="submit">Publier</button>
+    </form>
+  </section>
+
+  <h2>Articles</h2>
+  <div id="posts"></div>
+
+  <script>
+    // Le cookie d'authentification est HttpOnly : ce script ne le voit jamais.
+    // fetch() l'envoie automatiquement (même origine).
+    const $ = (id) => document.getElementById(id);
+    let currentUser = null;
+
+    async function api(url, options = {}) {
+      const res = await fetch(url, {
+        ...options,
+        headers: { "Content-Type": "application/json", ...options.headers },
+      });
+      const data = res.status === 204 ? null : await res.json();
+      if (res.status === 401 && currentUser) {
+        // Authentification expirée ou invalide : retour transparent à l'écran de connexion.
+        setUser(null);
+      }
+      if (!res.ok) throw new Error(data?.error || "Erreur");
+      return data;
+    }
+
+    function setUser(user) {
+      currentUser = user;
+      $("guest").classList.toggle("hidden", !!user);
+      $("member").classList.toggle("hidden", !user);
+      $("whoami").textContent = user?.username ?? "";
+      renderPosts();
+    }
+
+    let posts = [];
+    async function loadPosts() {
+      posts = (await api("/api/posts")).posts;
+      renderPosts();
+    }
+
+    function renderPosts() {
+      const container = $("posts");
+      container.replaceChildren();
+      for (const post of posts) {
+        const el = document.createElement("article");
+        const h3 = document.createElement("h3");
+        h3.textContent = post.title;
+        const p = document.createElement("p");
+        p.textContent = post.content;
+        const meta = document.createElement("small");
+        meta.textContent = `par ${post.author.username} — ${new Date(post.createdAt).toLocaleString("fr-FR")}`;
+        el.append(h3, p, meta);
+        if (currentUser && (currentUser.id === post.author.id || currentUser.role === "admin")) {
+          const del = document.createElement("button");
+          del.textContent = "Supprimer";
+          del.onclick = () => run(async () => {
+            await api(`/api/posts/${post.id}`, { method: "DELETE" });
+            await loadPosts();
+          });
+          el.append(" ", del);
+        }
+        container.append(el);
+      }
+    }
+
+    async function run(fn) {
+      $("msg").textContent = "";
+      try { await fn(); } catch (err) { $("msg").textContent = err.message; }
+    }
+
+    $("auth-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const body = JSON.stringify(Object.fromEntries(new FormData(e.target)));
+      const action = e.submitter.dataset.action;
+      run(async () => {
+        if (action === "register") await api("/api/register", { method: "POST", body });
+        const { user } = await api("/api/login", { method: "POST", body });
+        e.target.reset();
+        setUser(user);
+      });
+    });
+
+    $("post-form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const body = JSON.stringify(Object.fromEntries(new FormData(e.target)));
+      run(async () => {
+        await api("/api/posts", { method: "POST", body });
+        e.target.reset();
+        await loadPosts();
+      });
+    });
+
+    $("logout").addEventListener("click", () => run(async () => {
+      await api("/api/logout", { method: "POST" });
+      setUser(null);
+    }));
+
+    // Au chargement : le cookie éventuel suffit à restaurer la session.
+    run(async () => {
+      await loadPosts();
+      try { setUser((await api("/api/me")).user); } catch { setUser(null); }
+    });
+  </script>
+</body>
+</html>
